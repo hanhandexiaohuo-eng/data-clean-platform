@@ -1,0 +1,77 @@
+# ============================================================
+# DataClean 平台 - 后端配置模板
+# ------------------------------------------------------------
+# 用法：
+#   1. 复制本文件为同目录下的 application.yml
+#   2. 把 ${XXX} 占位符替换为你自己的值，可用两种方式：
+#        a) 直接在 application.yml 中填明文（本地开发，且已确认该文件被 .gitignore 忽略）
+#        b) 通过环境变量注入（推荐，配置文件中不出现任何明文）
+#   3. 切勿把填好真实值的 application.yml 提交到仓库
+# ============================================================
+
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 数据库连接地址：改为你自己的 host / port / 库名
+    url: ${DB_URL:jdbc:mysql://localhost:3306/dataclean?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowMultiQueries=true}
+    username: ${DB_USERNAME:your_db_username}
+    password: ${DB_PASSWORD:your_db_password}
+    druid:
+      initial-size: 5
+      min-idle: 5
+      max-active: 20
+      max-wait: 60000
+      test-on-borrow: true
+      validation-query: SELECT 1
+
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 100MB
+      max-request-size: 200MB
+
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.dataclean.entity
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      table-prefix: ""
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.dataclean: debug
+    com.baomidou.mybatisplus: info
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{50} - %msg%n"
+
+# JWT 配置
+# secret 必须替换为随机长字符串（建议 >= 32 位），生成方式见 README
+jwt:
+  secret: ${JWT_SECRET:CHANGE_ME_TO_A_RANDOM_32_CHAR_MIN_SECRET}
+  expiration: 604800000
+  header: Authorization
+  prefix: "Bearer "
+
+upload:
+  path: ./uploads
