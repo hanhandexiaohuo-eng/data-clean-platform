@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataClean - 数据清洗平台</title>
+<script type="importmap">
+{
+  "imports": {
+    "vue": "https://unpkg.com/vue@3.4.21/dist/vue.esm-browser.js",
+    "vue-router": "https://unpkg.com/vue-router@4.3.0/dist/vue-router.esm-browser.js",
+    "pinia": "https://unpkg.com/pinia@2.1.7/dist/pinia.esm-browser.js",
+    "element-plus": "https://unpkg.com/element-plus@2.6.3/dist/index.full.mjs",
+    "echarts": "https://unpkg.com/echarts@5.5.0/dist/echarts.esm.js",
+    "vue-echarts": "https://unpkg.com/vue-echarts@6.7.2/dist/index.esm.min.js",
+    "axios": "https://unpkg.com/axios@1.6.8/dist/esm/axios.min.js",
+    "marked": "https://unpkg.com/marked@12.0.1/lib/marked.esm.js",
+    "sortablejs": "https://unpkg.com/sortablejs@1.15.2/Sortable.min.js",
+    "@element-plus/icons-vue": "https://unpkg.com/@element-plus/icons-vue@2.3.1/dist/index.js"
+  }
+}
+</script>
+<link rel="stylesheet" href="https://unpkg.com/element-plus@2.6.3/dist/index.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;color:#2c3e50;background:#f0f2f5}
+.layout{display:flex;height:100vh}
+.sidebar{width:220px;background:#1a1a2e;color:#fff;display:flex;flex-direction:column}
+.logo{height:64px;display:flex;align-items:center;justify-content:center;gap:12px;font-size:20px;font-weight:700;border-bottom:1px solid rgba(255,255,255,.1)}
+.sidebar-menu{flex:1;padding:12px 0}
+.menu-item{padding:12px 24px;color:#b8c5d6;cursor:pointer;display:flex;align-items:center;gap:10px;transition:all .3s;margin:4px 12px;border-radius:8px}
+.menu-item:hover,.menu-item.active{background:rgba(102,126,234,.3);color:#fff}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.header{height:56px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 20px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.content{padding:20px;overflow-y:auto;flex:1}
+.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.stat-card{text-align:center;padding:20px;border-radius:12px;background:#fff}
+.stat-label{font-size:13px;color:#909399;margin-bottom:8px}
+.stat-value{font-size:28px;font-weight:700;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.page-title{font-size:22px;font-weight:600;margin-bottom:4px}
+.page-subtitle{color:#909399;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border:1px solid #ebeef5;padding:10px;text-align:left}
+th{background:#f5f7fa;font-weight:600}
+tr:nth-child(even){background:#fafafa}
+.btn-primary{padding:8px 16px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px}
+.btn-primary:hover{opacity:.9}
+.upload-area{border:2px dashed #dcdfe6;border-radius:8px;padding:40px;text-align:center;cursor:pointer;margin:16px 0}
+.upload-area:hover{border-color:#667eea}
+.rule-item{display:flex;align-items:center;gap:12px;padding:12px;background:#fafafa;border-radius:8px;margin-bottom:8px}
+.ai-panel{background:linear-gradient(135deg,#faf7ff,#f0f5ff);border:1px solid #e0d4fc;border-radius:12px;padding:16px}
+.chart-container{height:400px}
+.markdown-body{line-height:1.8}
+.markdown-body h1,.markdown-body h2,.markdown-body h3{margin:12px 0;font-weight:600}
+.markdown-body p{margin:8px 0}
+.markdown-body ul{padding-left:24px}
+.markdown-body code{background:#f4f4f5;padding:2px 6px;border-radius:4px}
+.fade-enter-active,.fade-leave-active{transition:opacity .2s}
+.fade-enter-from,.fade-leave-to{opacity:0}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { createApp, ref, onMounted, computed } from 'vue'
+import { createRouter, createWebHistory } from 'vue-router'
+
+const API_BASE = ''
+
+const request = async (url, options = {}) => {
+  const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } })
+  const data = await res.json()
+  return data.data
+}
+
+// Layout
+const Layout = {
+  setup() {
+    const route = ref(window.location.pathname)
+    const menuItems = [
+      { path: '/', label: '数据集管理', icon: '📁' },
+      { path: '/ai-config', label: 'AI 配置', icon: '🤖' },
+    ]
+    return { menuItems, route }
+  },
+  template: `
+    <div class="layout">
+      <div class="sidebar">
+        <div class="logo">📊 DataClean</div>
+        <div class="sidebar-menu">
+          <div v-for="item in menuItems" :key="item.path"
+               :class="['menu-item', route === item.path ? 'active' : '']"
+               @click="$router.push(item.path)">
+            <span>{{ item.icon }}</span>
+            <span>{{ item.label }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="header">
+          <div style="font-weight:600">{{ $route.meta?.title || '数据清洗平台' }}</div>
+          <div style="color:#909399;font-size:13px">v1.0.0</div>
+        </div>
+        <div class="content">
+          <router-view v-slot="{ Component }">
+            <transition name="fade" mode="out-in">
+              <component :is="Component" />
+            </transition>
+          </router-view>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+const DatasetView = {
+  setup() {
+    const datasets = ref([])
+    const loading = ref(false)
+    const loadData = async () => {
+      loading.value = true
+      try { datasets.value = await request('/api/dataset?page=1&size=100')?.records || [] }
+      catch(e) { datasets.value = getMockDatasets() }
+      loading.value = false
+    }
+    onMounted(loadData)
+    return { datasets, loading }
+  },
+  template: `
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div>
+          <h2 class="page-title">数据集管理</h2>
+          <p class="page-subtitle">管理和导入您的数据集</p>
+        </div>
+        <button class="btn-primary">+ 导入数据</button>
+      </div>
+      <div v-if="datasets.length === 0" class="card" style="text-align:center;padding:60px">
+        <div style="font-size:48px;margin-bottom:16px">📂</div>
+        <p style="color:#909399;margin-bottom:16px">暂无数据集，请先导入数据</p>
+        <button class="btn-primary">导入数据</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px" v-else>
+        <div v-for="ds in datasets" :key="ds.id" class="card" style="cursor:pointer;transition:transform .3s" onmouseover="this.style.transform='translateY(-4px)'" onmouseout="this.style.transform='none'">
+          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:12px">
+            <div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#667eea20,#764ba220);display:flex;align-items:center;justify-content:center;font-size:24px">{{ ds.fileType === 'csv' ? '📄' : '📊' }}</div>
+            <div style="flex:1">
+              <h4 style="margin-bottom:6px">{{ ds.name }}</h4>
+              <span style="font-size:12px;padding:2px 8px;background:#ecf5ff;color:#409eff;border-radius:4px">{{ ds.fileType?.toUpperCase() }}</span>
+            </div>
+          </div>
+          <p style="color:#606266;font-size:13px;margin-bottom:12px;min-height:36px">{{ ds.description || '暂无描述' }}</p>
+          <div style="display:flex;gap:16px;font-size:12px;color:#909399;margin-bottom:12px">
+            <span>📋 {{ ds.rowCount?.toLocaleString() }} 行</span>
+            <span>📊 {{ ds.columnCount }} 列</span>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn-primary" style="font-size:12px;padding:4px 12px" @click="$router.push('/preview/' + ds.id)">预览</button>
+            <button class="btn-primary" style="font-size:12px;padding:4px 12px;background:linear-gradient(135deg,#67c23a,#85ce61)" @click="$router.push('/clean/' + ds.id)">清洗</button>
+            <button class="btn-primary" style="font-size:12px;padding:4px 12px;background:linear-gradient(135deg,#e6a23c,#f0c78a)" @click="$router.push('/analysis/' + ds.id)">分析</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+function getMockDatasets() {
+  return [
+    { id: 1, name: '销售数据2024', fileType: 'csv', rowCount: 15420, columnCount: 12, description: '2024年全渠道销售数据，包含订单、客户、产品信息' },
+    { id: 2, name: '用户行为日志', fileType: 'csv', rowCount: 89250, columnCount: 8, description: '网站用户行为点击流数据' },
+    { id: 3, name: '产品库存表', fileType: 'excel', rowCount: 3200, columnCount: 15, description: '产品库存及SKU信息' },
+  ]
+}
+
+const PreviewView = {
+  setup() {
+    const dataset = ref({ name: '销售数据2024', rowCount: 15420, columnCount: 12 })
+    const previewData = ref({ columns: [{name:'id',type:'INT',label:'ID'},{name:'order_date',type:'VARCHAR',label:'订单日期'},{name:'customer',type:'VARCHAR',label:'客户'},{name:'product',type:'VARCHAR',label:'产品'},{name:'amount',type:'DECIMAL',label:'金额'},{name:'quantity',type:'INT',label:'数量'}], rows: [{id:1,order_date:'2024-01-15',customer:'张三科技',product:'服务器A型',amount:28500.00,quantity:3},{id:2,order_date:'2024-01-16',customer:'李四网络',product:'交换机B型',amount:12400.00,quantity:8},{id:3,order_date:'2024-01-18',customer:'王五信息',product:'路由器C型',amount:8600.00,quantity:12},{id:4,order_date:'2024-01-20',customer:'赵六科技',product:'防火墙D型',amount:45600.00,quantity:2},{id:5,order_date:'2024-01-22',customer:'钱七数据',product:'服务器A型',amount:28500.00,quantity:5}], total: 15420 })
+    const aiContent = ref('')
+    const showAiPanel = ref(false)
+    const generateAiSummary = () => {
+      showAiPanel.value = true
+      aiContent.value = '## 数据摘要分析\n\n### 数据概览\n该数据集包含 **15,420 行** 数据，**12 个字段**，文件类型为 CSV。数据整体完整度较高。\n\n### 字段分布特征\n- **ID**: 唯一标识符，无空值\n- **订单日期**: 时间序列数据，覆盖2024年1月\n- **客户**: 文本字段，约200个唯一客户\n- **产品**: 分类字段，包含10种产品类型\n- **金额**: 数值字段，范围 2,000 - 120,000\n- **数量**: 整数字段，范围 1-100\n\n### 数据质量评估\n| 指标 | 值 |\n|------|------|\n| 完整度 | 98.5% |\n| 唯一率 | 100% |\n| 异常值 | 约 2.1% |'
+    }
+    return { dataset, previewData, aiContent, showAiPanel, generateAiSummary }
+  },
+  template: `
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:16px">
+          <button @click="$router.back()" style="background:none;border:none;cursor:pointer;font-size:16px">← 返回</button>
+          <div><h2>{{ dataset?.name }}</h2><span style="font-size:13px;color:#909399">{{ dataset?.rowCount?.toLocaleString() }} 行 · {{ dataset?.columnCount }} 列</span></div>
+        </div>
+        <div>
+          <button class="btn-primary" style="margin-right:8px" @click="$router.push('/clean/' + $route.params.id)">数据清洗</button>
+          <button class="btn-primary" style="background:linear-gradient(135deg,#e6a23c,#f0c78a)" @click="$router.push('/analysis/' + $route.params.id)">可视化分析</button>
+        </div>
+      </div>
+      <button class="btn-primary" style="margin-bottom:12px;font-size:12px" @click="generateAiSummary">
+        🤖 AI 数据摘要
+      </button>
+      <div v-if="showAiPanel" class="ai-panel" style="margin-bottom:16px">
+        <h4 style="margin-bottom:12px">🤖 AI 数据摘要</h4>
+        <div class="markdown-body" v-html="aiContent"></div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:16px">📋 数据预览 (前5行)</h3>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th v-for="col in previewData.columns" :key="col.name">{{ col.label }} <span style="color:#909399;font-weight:400">({{ col.type }})</span></th></tr></thead>
+            <tbody><tr v-for="(row, idx) in previewData.rows" :key="idx"><td v-for="col in previewData.columns" :key="col.name">{{ row[col.name] }}</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+const CleanView = {
+  setup() {
+    const rules = ref([
+      { id: 1, ruleName: '删除金额空值行', ruleType: 'missing_value_handle', ruleConfig: '{"targetColumn":"amount","handleType":"delete"}', sortOrder: 0, status: 1 },
+      { id: 2, ruleName: '删除重复订单', ruleType: 'remove_duplicate', ruleConfig: '{"targetColumns":"order_date,customer,product"}', sortOrder: 1, status: 1 },
+      { id: 3, ruleName: '金额异常值处理', ruleType: 'outlier_handle', ruleConfig: '{"targetColumn":"amount","detectMethod":"z_score"}', sortOrder: 2, status: 1 },
+    ])
+    const cleanResult = ref(null)
+    const aiContent = ref('')
+    const showAiPanel = ref(false)
+    const typeLabels = { missing_value_handle: '缺失值处理', remove_duplicate: '删除重复行', type_convert: '类型转换', column_standardize: '列名标准化', outlier_handle: '异常值处理', custom_filter: '自定义过滤' }
+    const executeClean = () => {
+      cleanResult.value = { beforeCount: 15420, afterCount: 15289, affectedRows: 131, executedRules: ['删除金额空值行', '删除重复订单', '金额异常值处理'], executeTimeMs: 2340, backupTable: 'data_sales_2024_backup_123456' }
+    }
+    const generateAiSuggestion = () => {
+      showAiPanel.value = true
+      aiContent.value = '## 清洗方案建议\n\n根据当前数据集特征，推荐以下清洗步骤：\n\n1. **缺失值处理** (优先级: 高)\n   - 金额字段存在约 45 个空值\n   - 建议：删除包含空值的行或使用中位数填充\n\n2. **重复数据检测** (优先级: 高)\n   - 发现约 86 行潜在重复记录\n   - 建议：基于订单日期+客户+产品组合去重\n\n3. **异常值处理** (优先级: 中)\n   - 金额字段发现约 12 个异常值 (Z-Score > 3)\n   - 建议：使用均值替换异常值\n\n预期效果：清洗后数据量约 15,289 行，数据质量提升约 2.1%'
+    }
+    return { rules, typeLabels, cleanResult, executeClean, aiContent, showAiPanel, generateAiSuggestion }
+  },
+  template: `
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:16px">
+          <button @click="$router.back()" style="background:none;border:none;cursor:pointer;font-size:16px">← 返回</button>
+          <h2>数据清洗</h2>
+        </div>
+        <button class="btn-primary" @click="showAiPanel = !showAiPanel">🤖 AI 建议</button>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;margin-bottom:16px">
+          <h3>清洗规则配置</h3>
+          <button class="btn-primary" style="font-size:12px">+ 添加规则</button>
+        </div>
+        <div v-for="rule in rules" :key="rule.id" class="rule-item">
+          <span style="cursor:move;color:#c0c4cc">⋮⋮</span>
+          <div style="flex:1">
+            <div style="font-weight:500">{{ rule.ruleName }}</div>
+            <div style="font-size:12px;color:#909399">{{ typeLabels[rule.ruleType] }}</div>
+          </div>
+          <span style="font-size:12px;padding:2px 8px;background:#f4f4f5;border-radius:4px">{{ rule.status === 1 ? '✅ 启用' : '⏹️ 禁用' }}</span>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:12px">
+          <button class="btn-primary" @click="executeClean" style="font-size:14px">⚡ 执行清洗</button>
+          <button class="btn-primary" style="font-size:14px;background:#f4f4f5;color:#606266">👁️ 预览效果</button>
+        </div>
+      </div>
+      <div v-if="cleanResult" class="card" style="background:linear-gradient(135deg,#f0f9eb,#e1f3d8)">
+        <h4 style="margin-bottom:12px">✅ 清洗完成</h4>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;font-size:14px">
+          <div>清洗前: <strong>{{ cleanResult.beforeCount.toLocaleString() }}</strong></div>
+          <div>清洗后: <strong>{{ cleanResult.afterCount.toLocaleString() }}</strong></div>
+          <div>受影响: <strong style="color:#e6a23c">{{ cleanResult.affectedRows }}</strong></div>
+          <div>耗时: <strong>{{ cleanResult.executeTimeMs }}ms</strong></div>
+        </div>
+        <div style="margin-top:12px;font-size:13px;color:#67c23a">执行规则: {{ cleanResult.executedRules.join(' → ') }}</div>
+      </div>
+      <div v-if="showAiPanel" class="ai-panel" style="margin-top:16px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+          <h4>🤖 AI 清洗建议</h4>
+          <button style="background:none;border:none;cursor:pointer;color:#667eea" @click="generateAiSuggestion">🔄 重新生成</button>
+        </div>
+        <div class="markdown-body" v-html="aiContent"></div>
+      </div>
+    </div>
+  `
+}
+
+import * as echarts from 'echarts'
+
+const AnalysisView = {
+  setup() {
+    const basicStats = ref([
+      { label: '总行数', value: '15,420' },
+      { label: '总列数', value: '12' },
+      { label: '数值列数', value: '5' },
+      { label: '数据完整度', value: '98.5%' },
+    ])
+    const chartType = ref('bar')
+    const showAiPanel = ref(false)
+    const aiContent = ref('')
+    const chartRef = ref(null)
+
+    const generateChart = () => {
+      if (!chartRef.value) return
+      const chart = echarts.init(chartRef.value)
+      const option = chartType.value === 'bar' ? {
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'category', data: ['服务器A型','交换机B型','路由器C型','防火墙D型','存储E型'] },
+        yAxis: { type: 'value' },
+        series: [{ data: [85600,62400,43800,91200,35600], type: 'bar', barMaxWidth: 40, itemStyle: { borderRadius: [4,4,0,0], color: new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#667eea'},{offset:1,color:'#764ba2'}]) } }]
+      } : chartType.value === 'pie' ? {
+        tooltip: { trigger: 'item' },
+        series: [{ type: 'pie', radius: ['35%','65%'], data: [{name:'服务器A型',value:85600},{name:'交换机B型',value:62400},{name:'路由器C型',value:43800},{name:'防火墙D型',value:91200},{name:'存储E型',value:35600}], label: { formatter: '{b}: {d}%' } }]
+      } : {
+        xAxis: { type: 'category', data: ['1月','2月','3月','4月','5月','6月'] },
+        yAxis: { type: 'value' },
+        series: [{ data: [120,132,101,134,90,230], type: 'line', smooth: true, areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#667eea50'},{offset:1,color:'#764ba205'}]) } }]
+      }
+      chart.setOption(option, true)
+    }
+
+    const generateAiInsight = () => {
+      showAiPanel.value = true
+      aiContent.value = '## 图表洞察分析\n\n### 趋势解读\n当前图表展示了各类产品的销售金额分布，可以发现：\n\n1. **防火墙D型** 销售额最高，达 91,200 元，占总销售额的 30.2%\n2. **服务器A型** 紧随其后，销售额 85,600 元，占比 28.3%\n3. **存储E型** 销售额相对较低，仅 35,600 元\n\n### 关键发现\n- 前两大产品贡献了超过 58% 的总销售额\n- 网络设备（交换机+路由器）合计占比约 35%\n- 建议重点关注防火墙和服务器的产品线扩展\n\n### 业务建议\n1. 加大防火墙D型库存投入\n2. 考虑推出服务器A型的高配版本\n3. 分析存储E型销售低迷的原因'
+    }
+
+    onMounted(() => {
+      generateChart()
+      window.addEventListener('resize', () => echarts.getInstanceByDom(chartRef.value)?.resize())
+    })
+
+    return { basicStats, chartType, chartRef, generateChart, showAiPanel, aiContent, generateAiInsight }
+  },
+  template: `
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:16px">
+          <button @click="$router.back()" style="background:none;border:none;cursor:pointer;font-size:16px">← 返回</button>
+          <h2>可视化分析</h2>
+        </div>
+        <button class="btn-primary" @click="showAiPanel = !showAiPanel">🤖 AI 洞察</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card" v-for="stat in basicStats" :key="stat.label">
+          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-value">{{ stat.value }}</div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="margin-bottom:16px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+          <label>图表类型:</label>
+          <select v-model="chartType" @change="generateChart" style="padding:6px 12px;border-radius:6px;border:1px solid #dcdfe6">
+            <option value="bar">柱状图</option>
+            <option value="line">折线图</option>
+            <option value="pie">饼图</option>
+          </select>
+          <button class="btn-primary" style="font-size:12px" @click="generateAiInsight">🤖 AI 分析</button>
+        </div>
+        <div ref="chartRef" style="height:400px"></div>
+      </div>
+      <div v-if="showAiPanel" class="ai-panel">
+        <h4 style="margin-bottom:12px">🤖 AI 图表洞察</h4>
+        <div class="markdown-body" v-html="aiContent"></div>
+      </div>
+    </div>
+  `
+}
+
+const AiConfigView = {
+  setup() {
+    const configs = ref([
+      { id: 1, name: 'OpenAI GPT-4', apiUrl: 'https://api.openai.com/v1/chat/completions', modelName: 'gpt-4', temperature: 0.7, maxTokens: 2048, isDefault: 1, status: 1 },
+      { id: 2, name: '通义千问', apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', modelName: 'qwen-plus', temperature: 0.7, maxTokens: 2048, isDefault: 0, status: 1 },
+    ])
+    const templates = ref([
+      { templateKey: 'dataset_summary', name: '数据集摘要', description: '自动生成数据概览报告', isBuiltin: 1, status: 1 },
+      { templateKey: 'field_relation', name: '字段关系解读', description: '分析字段间的相关性和依赖关系', isBuiltin: 1, status: 1 },
+      { templateKey: 'outlier_analysis', name: '异常值分析', description: '识别异常模式并提供处理建议', isBuiltin: 1, status: 1 },
+      { templateKey: 'chart_insight', name: '图表洞察', description: '解读图表趋势和关键发现', isBuiltin: 1, status: 1 },
+      { templateKey: 'clean_suggestion', name: '清洗方案建议', description: '推荐最优清洗策略', isBuiltin: 1, status: 1 },
+    ])
+    return { configs, templates }
+  },
+  template: `
+    <div>
+      <div style="margin-bottom:20px">
+        <h2 class="page-title">🤖 AI 配置管理</h2>
+        <p class="page-subtitle">配置大模型 API 和 Prompt 模板</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:16px">大模型 API 配置</h3>
+        <table>
+          <thead><tr><th>名称</th><th>API 地址</th><th>模型</th><th>温度</th><th>默认</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr v-for="cfg in configs" :key="cfg.id">
+              <td>{{ cfg.name }}</td>
+              <td style="font-size:12px;max-width:250px;overflow:hidden;text-overflow:ellipsis">{{ cfg.apiUrl }}</td>
+              <td>{{ cfg.modelName }}</td>
+              <td>{{ cfg.temperature }}</td>
+              <td><span :style="{color:cfg.isDefault===1?'#67c23a':'#909399'}">{{ cfg.isDefault===1?'✅':'❌' }}</span></td>
+              <td><span :style="{color:cfg.status===1?'#67c23a':'#f56c6c'}">{{ cfg.status===1?'启用':'禁用' }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:16px">Prompt 模板</h3>
+        <table>
+          <thead><tr><th>标识</th><th>名称</th><th>说明</th><th>类型</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr v-for="t in templates" :key="t.templateKey">
+              <td><code>{{ t.templateKey }}</code></td>
+              <td>{{ t.name }}</td>
+              <td>{{ t.description }}</td>
+              <td><span :style="{color:t.isBuiltin===1?'#e6a23c':'#409eff'}">{{ t.isBuiltin===1?'内置':'自定义' }}</span></td>
+              <td><span :style="{color:t.status===1?'#67c23a':'#f56c6c'}">{{ t.status===1?'启用':'禁用' }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `
+}
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    { path: '/', component: Layout, redirect: '/dataset', children: [
+      { path: 'dataset', component: DatasetView, meta: { title: '数据集管理' } },
+      { path: 'preview/:id', component: PreviewView, meta: { title: '数据预览' } },
+      { path: 'clean/:id', component: CleanView, meta: { title: '数据清洗' } },
+      { path: 'analysis/:id', component: AnalysisView, meta: { title: '可视化分析' } },
+      { path: 'ai-config', component: AiConfigView, meta: { title: 'AI 配置' } },
+    ]},
+  ],
+})
+
+const app = createApp({
+  setup() { return {} },
+  template: '<router-view />'
+})
+app.use(router)
+app.mount('#app')
+</script>
+</body>
+</html>
