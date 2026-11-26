@@ -1,0 +1,151 @@
+{
+  "context": {
+    "datasetId": 30,
+    "chartId": 14,
+    "dashId": 8,
+    "v1": 34,
+    "v2": 35,
+    "v3": 36,
+    "itemId": 9
+  },
+  "results": [
+    {
+      "id": "S0",
+      "title": "建立匿名会话",
+      "pass": true,
+      "detail": "__Host-dc_anon"
+    },
+    {
+      "id": "S1",
+      "title": "上传测试数据集",
+      "pass": true,
+      "detail": "datasetId=30"
+    },
+    {
+      "id": "S2",
+      "title": "读取初始版本",
+      "pass": true,
+      "detail": "v1=34"
+    },
+    {
+      "id": "S3",
+      "title": "保存图表并绑定 v1",
+      "pass": true,
+      "detail": "chartId=14 saved=34 stale=false"
+    },
+    {
+      "id": "A",
+      "title": "正常 CSV 导出",
+      "pass": true,
+      "detail": "status=200 ct=text/csv;charset=UTF-8 len=61 first=\"﻿x_val,y_val\\r\\nBeijing,400.0\\r\\nShenzhen,20\""
+    },
+    {
+      "id": "B",
+      "title": "正常 PNG 导出",
+      "pass": true,
+      "detail": "status=200 ct=image/png;charset=UTF-8 len=13754 magic=true"
+    },
+    {
+      "id": "6",
+      "title": "图表未过期时刷新",
+      "pass": true,
+      "detail": "status=200 dataVersionId=34"
+    },
+    {
+      "id": "S4",
+      "title": "通过清洗产生新版本",
+      "pass": true,
+      "detail": "v1=34 -> v2=35"
+    },
+    {
+      "id": "C1",
+      "title": "过期图表 CSV 导出返回 409 JSON",
+      "pass": true,
+      "detail": "status=409 ct=application/json;charset=UTF-8 msg=数据已更新，需要确认是否使用最新版本"
+    },
+    {
+      "id": "C2",
+      "title": "过期图表 PNG 导出返回 409 JSON",
+      "pass": true,
+      "detail": "status=409 ct=application/json;charset=UTF-8 msg=数据已更新，需要确认是否使用最新版本"
+    },
+    {
+      "id": "7",
+      "title": "过期且未确认刷新 → 409 且不改版本关联",
+      "pass": true,
+      "detail": "status=409 msg=数据已更新，需要确认是否使用最新版本 saved=34 cur=35"
+    },
+    {
+      "id": "8",
+      "title": "过期且确认版本错误 → 409 且不改版本关联",
+      "pass": true,
+      "detail": "status=409 msg=数据版本已再次变化，请重新确认 saved=34"
+    },
+    {
+      "id": "9",
+      "title": "过期且确认版本正确 → 刷新成功并重绑 v2",
+      "pass": true,
+      "detail": "status=200 dataVersionId=35 saved=35 stale=false"
+    },
+    {
+      "id": "10",
+      "title": "刷新后 CSV 导出恢复正常",
+      "pass": true,
+      "detail": "status=200 ct=text/csv;charset=UTF-8"
+    },
+    {
+      "id": "11",
+      "title": "创建看板并添加图表",
+      "pass": true,
+      "detail": "dashId=8 itemId=9 itemStale=false"
+    },
+    {
+      "id": "S5",
+      "title": "产生第二个新版本",
+      "pass": true,
+      "detail": "v2=35 -> v3=36"
+    },
+    {
+      "id": "12",
+      "title": "数据集更新后看板条目呈现 stale",
+      "pass": true,
+      "detail": "itemStale=true saved=35 cur=36"
+    },
+    {
+      "id": "13",
+      "title": "数据集再次更新后旧确认版本被拒绝 → 409",
+      "pass": true,
+      "detail": "status=409 msg=数据版本已再次变化，请重新确认 saved=35"
+    },
+    {
+      "id": "14",
+      "title": "确认最新版本刷新成功且看板恢复",
+      "pass": true,
+      "detail": "status=200 dataVersionId=36 itemStale=false saved=36"
+    },
+    {
+      "id": "D1",
+      "title": "400 语义（缺少 X-Confirm）",
+      "pass": true,
+      "detail": "status=400 msg=请确认后再执行该操作"
+    },
+    {
+      "id": "D2",
+      "title": "404 语义（图表不存在）",
+      "pass": true,
+      "detail": "status=404 msg=资源不存在"
+    },
+    {
+      "id": "D3",
+      "title": "401 语义（无匿名会话）",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "id": "D4",
+      "title": "403 语义（演示数据集只读）",
+      "pass": true,
+      "detail": "status=403 msg=官方演示数据为只读，不支持修改、清洗、删除或导出"
+    }
+  ]
+}

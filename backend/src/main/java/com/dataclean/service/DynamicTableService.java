@@ -3,6 +3,7 @@ package com.dataclean.service;
 import com.dataclean.entity.DatasetColumn;
 import com.dataclean.mapper.DatasetMapper;
 import com.dataclean.util.SqlBuilderUtil;
+import com.dataclean.util.SqlGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,8 +41,9 @@ public class DynamicTableService {
             return;
         }
 
+        String safeTable = SqlGuard.requireTableName(tableName);
         List<String> colNames = columns.stream()
-                .map(DatasetColumn::getColumnAlias)
+                .map(col -> SqlGuard.requireIdentifier(col.getColumnAlias(), "列名"))
                 .toList();
 
         // 构建列名到原始列名的映射
@@ -58,12 +60,14 @@ public class DynamicTableService {
             List<Map<String, Object>> batch = data.subList(batchStart, batchEnd);
 
             StringBuilder insertSql = new StringBuilder("INSERT INTO `");
-            insertSql.append(tableName).append("` (");
+            insertSql.append(safeTable).append("` (");
             insertSql.append(colNames.stream()
                     .map(c -> "`" + c + "`")
                     .reduce((a, b) -> a + ", " + b).orElse(""));
             insertSql.append(") VALUES ");
 
+            // 值统一走 MyBatis 参数绑定，不再手工拼接字符串
+            List<Object> params = new ArrayList<>(batch.size() * colNames.size());
             for (int i = 0; i < batch.size(); i++) {
                 if (i > 0) {
                     insertSql.append(", ");
@@ -76,12 +80,13 @@ public class DynamicTableService {
                     }
                     String col = colNames.get(j);
                     String originalName = colToOriginal.getOrDefault(col, col);
-                    insertSql.append(formatValue(row.get(originalName)));
+                    insertSql.append("#{params[").append(params.size()).append("]}");
+                    params.add(row.get(originalName));
                 }
                 insertSql.append(")");
             }
 
-            datasetMapper.executeDynamicSql(insertSql.toString());
+            datasetMapper.executeDynamicSqlWithParams(insertSql.toString(), params);
         }
 
         log.info("插入数据完成: {} 行", data.size());
@@ -135,7 +140,7 @@ public class DynamicTableService {
      * 获取表行数
      */
     public Long getTableRowCount(String tableName) {
-        return datasetMapper.selectDynamicDataCount(tableName);
+        return datasetMapper.selectDynamicDataCount(SqlGuard.requireTableName(tableName));
     }
 
     /**

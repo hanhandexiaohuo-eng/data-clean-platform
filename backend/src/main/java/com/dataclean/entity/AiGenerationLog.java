@@ -18,6 +18,7 @@ public class AiGenerationLog {
     private Integer tokensUsed;
     private Integer status;
     private String errorMsg;
+    private Long anonSessionId;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

@@ -1,0 +1,140 @@
+# ============================================================
+# DataClean 预发/生产告警规则（Prometheus 兼容）
+# ------------------------------------------------------------
+# 指标来源：backend 管理端口（容器内 8081，/actuator/prometheus）
+# 采集方式：见同目录 prometheus.yml；指标不经过公网 Nginx。
+# 阈值与应用内 app.monitoring.alert.* 保持一致，调整时两处同步。
+# ============================================================
+groups:
+  - name: dataclean-availability
+    rules:
+      - alert: DataCleanHigh5xxRate
+        expr: |
+          sum(rate(dc_http_responses_total{status="5xx"}[5m]))
+            / clamp_min(sum(rate(dc_http_responses_total[5m])), 0.001) > 0.02
+        for: 5m
+        labels:
+          severity: P0
+        annotations:
+          summary: "5xx 比例超过 2%"
+          description: "持续 5 分钟 5xx 占比超阈值，检查后端与数据库健康状态。"
+
+      - alert: DataCleanHigh429Rate
+        expr: |
+          sum(rate(dc_http_responses_total{status="429"}[5m]))
+            / clamp_min(sum(rate(dc_http_responses_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: P1
+        annotations:
+          summary: "429 比例超过 5%"
+          description: "大量请求被限流，确认是否遭刷量或容量不足。"
+
+      - alert: DataCleanBackendDown
+        expr: up{job="dataclean-backend"} == 0
+        for: 2m
+        labels:
+          severity: P0
+        annotations:
+          summary: "后端指标端点不可达"
+
+      # 容器健康：blackbox 从容器网络内部探测 nginx 与 backend(+DB)
+      - alert: DataCleanHealthProbeFailed
+        expr: probe_success{job="dataclean-blackbox"} == 0
+        for: 2m
+        labels:
+          severity: P0
+        annotations:
+          summary: "网关或后端健康探测失败"
+          description: "目标 {{ $labels.instance }} 连续 2 分钟不可用，检查容器健康状态与数据库连接。"
+
+  - name: dataclean-capacity
+    rules:
+      - alert: DataCleanSessionCapacity
+        expr: dc_alert_active{rule="session_capacity"} == 1
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "匿名会话接近全站上限"
+
+      - alert: DataCleanUploadVolume
+        expr: dc_alert_active{rule="upload_volume"} == 1
+        for: 10m
+        labels:
+          severity: P1
+        annotations:
+          summary: "上传卷使用率超过阈值"
+
+      - alert: DataCleanDbPool
+        expr: dc_alert_active{rule="db_pool"} == 1
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "数据库连接池使用率超过阈值"
+
+  - name: dataclean-security
+    rules:
+      - alert: DataCleanScanFailures
+        expr: increase(dc_upload_total{result="scan_failed"}[10m]) >= 3
+        for: 1m
+        labels:
+          severity: P1
+        annotations:
+          summary: "上传扫描失败次数异常"
+          description: "扫描服务可能不可用；上传已按 fail-closed 拒绝。"
+
+      - alert: DataCleanCleanupFailures
+        expr: increase(dc_cleanup_failures_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "公开数据清理存在失败项"
+
+      - alert: DataCleanOrphanTables
+        expr: dc_orphan_tables > 10
+        for: 30m
+        labels:
+          severity: P2
+        annotations:
+          summary: "孤儿动态表数量偏高（仅上报，不自动删除）"
+
+      - alert: DataCleanScannerDown
+        expr: probe_success{job="dataclean-blackbox", instance=~".*scanner.*"} == 0
+        for: 2m
+        labels:
+          severity: P1
+        annotations:
+          summary: "恶意文件扫描服务不可用"
+          description: "扫描服务探测失败；上传已按 fail-closed 拒绝，需立即恢复。"
+
+  - name: dataclean-ai-budget
+    rules:
+      - alert: DataCleanAiBudget
+        expr: dc_alert_active{rule="ai_budget"} == 1
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "AI 全站日预算接近上限"
+
+      - alert: DataCleanAiBreakerOpen
+        expr: increase(dc_ai_calls_total{result="breaker"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: P1
+        annotations:
+          summary: "AI 熔断已触发"
+
+      - alert: DataCleanAiFailureRate
+        expr: |
+          sum(rate(dc_ai_calls_total{result="failure"}[10m]))
+            / clamp_min(sum(rate(dc_ai_calls_total[10m])), 0.001) > 0.5
+        for: 10m
+        labels:
+          severity: P1
+        annotations:
+          summary: "AI 调用失败率超过 50%"
+          description: "检查供应商可用性、超时与熔断状态；失败率持续偏高时应关闭公开 AI 入口。"

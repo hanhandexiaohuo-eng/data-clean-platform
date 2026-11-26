@@ -1,0 +1,67 @@
+# ============================================================
+# Docker 构建上下文排除项
+# 目的：真实配置、密钥、运行数据、依赖与构建产物不进入镜像。
+# ============================================================
+
+# ---------- 版本控制 / IDE ----------
+.git
+.gitignore
+.idea
+.vscode
+*.iml
+
+# ---------- 环境变量与真实配置 ----------
+.env
+.env.*
+!.env.example
+**/application.yml
+**/application-*.yml
+**/application.properties
+**/application-*.properties
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/secrets.*
+**/*credential*
+**/*secret*.json
+
+# ---------- 依赖与构建产物 ----------
+**/node_modules
+**/dist
+**/dist-ssr
+**/target
+**/build
+**/out
+**/.vite
+**/*.class
+
+# ---------- 运行时数据 / 备份 / 日志 ----------
+**/uploads
+**/logs
+**/log
+**/backups
+**/*.log
+**/*.log.*
+
+# ---------- 不需要进入镜像的源码与文档 ----------
+backend/src/test
+sql
+scripts
+SECURITY_PHASE*.md
+README.md
+deploy/README.md
+
+# ---------- 数据库导出 / 压缩包 ----------
+**/*.sql.gz
+**/*.dump
+**/*.sqlite
+**/*.db
+**/*.zip
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+Desktop.ini

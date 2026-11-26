@@ -1,0 +1,112 @@
+# ============================================================
+# 恶意文件扫描覆盖（预发/生产必需）
+# ------------------------------------------------------------
+# 用法（叠加在基础栈与 HTTPS 覆盖之上）：
+#   docker compose -f docker-compose.yml \
+#     -f deploy/docker-compose.https.yml \
+#     -f deploy/docker-compose.scan.yml up -d --build
+#
+# 拓扑：
+#   backend ── app_net ──> scanner(HTTP /scan) ── scan_net ──> clamav(3310)
+#   - scanner 仅 expose 8080，不发布宿主机端口；
+#   - clamav 仅在 internal 网络，不发布端口；
+#   - .env 需设置 UPLOAD_SCAN_PROVIDER=http、UPLOAD_SCAN_URL=http://scanner:8080/scan。
+# ============================================================
+services:
+  clamav:
+    # 首次启动需下载病毒库，耗时较长；建议生产按发布节奏固定小版本号
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    volumes:
+      - clamav_db:/var/lib/clamav
+    environment:
+      # 容器内 freshclam 受 DNS/出口限制时，可置 true 关闭自动更新，
+      # 改由宿主机预置病毒库到 clamav_db 卷（预发环境采用此方式）
+      CLAMAV_NO_FRESHCLAMD: ${CLAMAV_NO_FRESHCLAMD:-false}
+      # 小内存主机（<4GB）加载 main.cvd 易触发 OOM：
+      # 可仅保留 daily.cvd 并限制扫描线程与并发库重载
+      CLAMD_CONF_MaxThreads: ${CLAMD_MAX_THREADS:-4}
+      CLAMD_CONF_ConcurrentDatabaseReload: "no"
+    # 仅当 CLAMAV_NO_FRESHCLAMD=true 时绕过入口脚本（避免「缺失 main.cvd 即联网首次下载」），
+    # 直接启动 clamd；其余情况保持镜像默认的 /init（freshclam 自动更新）。
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ "$${CLAMAV_NO_FRESHCLAMD:-false}" = "true" ]; then
+          mkdir -p /run/clamav /var/log/clamav
+          chown -R clamav:clamav /run/clamav /var/log/clamav
+          exec clamd --foreground --config-file=/etc/clamav/clamd.conf
+        fi
+        exec /init
+    # 部分云主机 DNS 仅返回 IPv6，容器无 IPv6 时 freshclam 会失败；
+    # 显式指定可返回 IPv4 的公共 DNS（可通过环境变量覆盖）
+    dns:
+      - ${CLAMAV_DNS_1:-223.5.5.5}
+      - ${CLAMAV_DNS_2:-119.29.29.29}
+    expose:
+      - "3310"
+    networks:
+      - scan_net
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  scanner:
+    build:
+      context: ./deploy/scan-adapter
+    image: dataclean-scanner:1
+    restart: unless-stopped
+    environment:
+      CLAMD_HOST: clamav
+      CLAMD_PORT: "3310"
+      # 与 backend 的 UPLOAD_SCAN_TOKEN 保持一致；留空表示不校验
+      SCAN_TOKEN: ${UPLOAD_SCAN_TOKEN:-}
+      MAX_FILE_BYTES: ${SCAN_MAX_FILE_BYTES:-33554432}
+      UPSTREAM_TIMEOUT_MS: ${SCAN_UPSTREAM_TIMEOUT_MS:-6000}
+    depends_on:
+      clamav:
+        condition: service_healthy
+    networks:
+      - app_net
+      - scan_net
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/health
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  scan_net:
+    name: dataclean_scan_net
+    driver: bridge
+    internal: true
+
+volumes:
+  clamav_db:
+    name: dataclean_clamav_db

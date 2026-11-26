@@ -1,0 +1,62 @@
+# ============================================================
+# 监控组件覆盖（预发/生产）
+# ------------------------------------------------------------
+# 用法（叠加在基础栈与 HTTPS/扫描覆盖之上）：
+#   docker compose -f docker-compose.yml \
+#     -f deploy/docker-compose.https.yml \
+#     -f deploy/docker-compose.scan.yml \
+#     -f deploy/docker-compose.monitoring.yml up -d --build
+#
+# 边界：
+#   - Prometheus 仅在容器网络内抓取 backend:8081，不映射公网端口；
+#   - UI/API 仅绑定宿主机回环 127.0.0.1，需经 SSH 隧道访问；
+#   - blackbox-exporter 仅内网 expose，从容器网络内部探测 nginx/backend/scanner。
+# ============================================================
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.listen-address=0.0.0.0:9090
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      # 仅回环绑定，不进入安全组放行范围
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - app_net
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    volumes:
+      - ./deploy/monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    expose:
+      - "9115"
+    networks:
+      - app_net
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  prometheus_data:
+    name: dataclean_prometheus_data

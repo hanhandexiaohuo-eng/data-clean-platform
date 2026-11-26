@@ -19,4 +19,8 @@ public interface CleanLogMapper extends BaseMapper<CleanLog> {
      */
     @Select("SELECT * FROM clean_log WHERE dataset_id = #{datasetId} ORDER BY created_at DESC")
     List<CleanLog> selectByDatasetId(@Param("datasetId") Long datasetId);
+
+    /** 匿名会话清洗执行次数（公开模式配额） */
+    @Select("SELECT COUNT(*) FROM clean_log WHERE anon_session_id = #{sessionId}")
+    long countByAnonSession(@Param("sessionId") Long sessionId);
 }

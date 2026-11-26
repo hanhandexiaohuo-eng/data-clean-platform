@@ -1,21 +1,29 @@
 package com.dataclean.service;
 
 import com.dataclean.dto.AiConfigDTO;
+import com.dataclean.dto.AiConfigVO;
 import com.dataclean.dto.AiGenerateDTO;
 import com.dataclean.dto.AiPromptTemplateDTO;
 import com.dataclean.entity.AiConfig;
 import com.dataclean.entity.AiGenerationLog;
 import com.dataclean.entity.AiPromptTemplate;
+import com.dataclean.enums.AiScene;
 import com.dataclean.exception.BusinessException;
 import com.dataclean.mapper.AiConfigMapper;
 import com.dataclean.mapper.AiGenerationLogMapper;
 import com.dataclean.mapper.AiPromptTemplateMapper;
+import com.dataclean.util.AiPiiMasker;
+import com.dataclean.util.AiSecretCipher;
 import com.dataclean.util.OkHttpUtil;
+import com.dataclean.util.SqlGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -38,19 +46,36 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AiService {
 
+    private static final int LOG_TEXT_LIMIT = 2000;
+
     private final AiConfigMapper aiConfigMapper;
     private final AiPromptTemplateMapper aiPromptTemplateMapper;
     private final AiGenerationLogMapper aiGenerationLogMapper;
     private final DatasetService datasetService;
     private final ObjectMapper objectMapper;
+    private final AiSecretCipher aiSecretCipher;
+    private final AiPiiMasker aiPiiMasker;
+    private final AiGovernanceService aiGovernanceService;
+
+    @Value("${app.ai.max-prompt-chars:20000}")
+    private int maxPromptChars;
 
     // ========== AI 配置管理 ==========
 
     /**
-     * 获取所有AI配置
+     * 获取所有AI配置（对外视图，不含任何明文密钥）
      */
-    public List<AiConfig> listConfigs() {
-        return aiConfigMapper.selectList(null);
+    public List<AiConfigVO> listConfigs() {
+        return aiConfigMapper.selectList(null).stream()
+                .map(AiConfigVO::from)
+                .toList();
+    }
+
+    /**
+     * 获取默认配置的对外视图
+     */
+    public AiConfigVO getDefaultConfigVO() {
+        return AiConfigVO.from(getDefaultConfig());
     }
 
     /**
@@ -77,26 +102,38 @@ public class AiService {
     @Transactional(rollbackFor = Exception.class)
     public void saveConfig(AiConfigDTO dto) {
         if (dto.getName() == null || dto.getName().trim().isEmpty()) {
-            throw new BusinessException("配置名称不能为空");
+            throw new BusinessException(400, "配置名称不能为空");
         }
         if (dto.getApiUrl() == null || dto.getApiUrl().trim().isEmpty()) {
-            throw new BusinessException("API地址不能为空");
+            throw new BusinessException(400, "API地址不能为空");
         }
-        if (dto.getApiKey() == null || dto.getApiKey().trim().isEmpty()) {
-            throw new BusinessException("API Key不能为空");
+        String apiUrl = dto.getApiUrl().trim();
+        if (!apiUrl.startsWith("https://") && !apiUrl.startsWith("http://")) {
+            throw new BusinessException(400, "API 地址必须为 http(s) 协议");
         }
 
         AiConfig config = new AiConfig();
         config.setId(dto.getId());
-        config.setName(dto.getName());
-        config.setApiUrl(dto.getApiUrl());
-        config.setApiKey(dto.getApiKey());
+        config.setName(dto.getName().trim());
+        config.setApiUrl(apiUrl);
         config.setModelName(dto.getModelName());
         config.setTemperature(dto.getTemperature());
         config.setMaxTokens(dto.getMaxTokens());
         config.setTimeout(dto.getTimeout());
         config.setIsDefault(dto.getIsDefault() != null ? dto.getIsDefault() : 0);
         config.setStatus(dto.getStatus() != null ? dto.getStatus() : 1);
+
+        // API Key 只写不读：新增时必须提供；编辑时留空表示保持不变
+        String rawKey = dto.getApiKey();
+        boolean keyProvided = rawKey != null && !rawKey.isBlank();
+        if (dto.getId() == null && !keyProvided) {
+            throw new BusinessException(400, "API Key不能为空");
+        }
+        if (keyProvided) {
+            String trimmedKey = rawKey.trim();
+            config.setApiKeyCipher(aiSecretCipher.encrypt(trimmedKey));
+            config.setApiKeyMask(AiSecretCipher.mask(trimmedKey));
+        }
 
         if (dto.getId() != null) {
             aiConfigMapper.updateById(config);
@@ -108,6 +145,20 @@ public class AiService {
         if (Integer.valueOf(1).equals(config.getIsDefault()) && config.getId() != null) {
             aiConfigMapper.resetDefault(config.getId());
         }
+    }
+
+    /**
+     * 仅在服务端调用链中解密使用，禁止把返回值写入日志或响应。
+     */
+    private String resolveApiKey(AiConfig config) {
+        if (config.getApiKeyCipher() != null && !config.getApiKeyCipher().isBlank()) {
+            return aiSecretCipher.decrypt(config.getApiKeyCipher());
+        }
+        // 兼容尚未迁移的存量明文（迁移任务会尽快将其转为密文并清空）
+        if (config.getApiKey() != null && !config.getApiKey().isBlank()) {
+            return config.getApiKey();
+        }
+        throw new BusinessException(400, "该 AI 配置尚未设置 API Key");
     }
 
     /**
@@ -192,23 +243,34 @@ public class AiService {
     // ========== AI 生成 ==========
 
     /**
-     * 同步生成AI内容
+     * 同步生成AI内容。
+     *
+     * <p>治理开启时统一走 {@link AiGovernanceService}（路由/配额/熔断/审计）；
+     * 关闭时回退到既有 ai_config 直连路径（回滚开关 AI_GOVERNANCE_ENABLED）。
      */
     public String generate(AiGenerateDTO dto) {
+        String prompt = null;
         try {
-            // 1. 获取配置
+            // 1. 构建Prompt（已脱敏并截断）
+            prompt = buildPrompt(dto);
+
+            if (aiGovernanceService.isEnabled()) {
+                AiGovernanceService.InvokeResult result = aiGovernanceService.invoke(
+                        resolveScene(dto), prompt, privateContext(dto));
+                saveGenerationLog(dto, prompt, result.text(), null, 1);
+                return result.text();
+            }
+
+            // 2. 获取配置
             AiConfig config = dto.getConfigId() != null
                     ? getConfigById(dto.getConfigId())
                     : getDefaultConfig();
-
-            // 2. 构建Prompt
-            String prompt = buildPrompt(dto);
 
             // 3. 调用AI接口
             int timeout = config.getTimeout() != null ? config.getTimeout() : 30000;
             String response = OkHttpUtil.callAiApi(
                     config.getApiUrl(),
-                    config.getApiKey(),
+                    resolveApiKey(config),
                     config.getModelName(),
                     config.getTemperature().doubleValue(),
                     config.getMaxTokens(),
@@ -221,10 +283,13 @@ public class AiService {
 
             return response;
 
+        } catch (BusinessException e) {
+            saveGenerationLog(dto, prompt == null ? "" : prompt, "", safeAiErrorMessage(e), 0);
+            throw e;
         } catch (IOException e) {
-            log.error("AI生成失败", e);
-            saveGenerationLog(dto, "", "", e.getMessage(), 0);
-            throw new BusinessException("AI生成失败: " + e.getMessage());
+            log.error("AI生成失败: {}", e.getClass().getSimpleName());
+            saveGenerationLog(dto, prompt == null ? "" : prompt, "", safeAiErrorMessage(e), 0);
+            throw new BusinessException("AI生成失败，请检查配置与网络");
         }
     }
 
@@ -236,21 +301,35 @@ public class AiService {
 
         CompletableFuture.runAsync(() -> {
             try {
-                AiConfig config = dto.getConfigId() != null
-                        ? getConfigById(dto.getConfigId())
-                        : getDefaultConfig();
-
-                String prompt = buildPrompt(dto);
-                StringBuilder fullResponse = new StringBuilder();
+                final String prompt = buildPrompt(dto);
 
                 // 发送开始标记
                 emitter.send(SseEmitter.event()
                         .name("start")
                         .data("{\"status\":\"started\"}"));
 
+                if (aiGovernanceService.isEnabled()) {
+                    AiGovernanceService.InvokeResult result = aiGovernanceService.invoke(
+                            resolveScene(dto), prompt, privateContext(dto));
+                    emitter.send(SseEmitter.event()
+                            .name("message")
+                            .data("{\"content\":\"" + escapeJson(result.text()) + "\"}"));
+                    emitter.send(SseEmitter.event()
+                            .name("complete")
+                            .data("{\"status\":\"completed\"}"));
+                    emitter.complete();
+                    saveGenerationLog(dto, prompt, result.text(), null, 1);
+                    return;
+                }
+
+                AiConfig config = dto.getConfigId() != null
+                        ? getConfigById(dto.getConfigId())
+                        : getDefaultConfig();
+                StringBuilder fullResponse = new StringBuilder();
+
                 OkHttpUtil.streamAiApi(
                         config.getApiUrl(),
-                        config.getApiKey(),
+                        resolveApiKey(config),
                         config.getModelName(),
                         config.getTemperature().doubleValue(),
                         config.getMaxTokens(),
@@ -270,7 +349,7 @@ public class AiService {
                             try {
                                 emitter.send(SseEmitter.event()
                                         .name("error")
-                                        .data("{\"error\":\"" + escapeJson(error.getMessage()) + "\"}"));
+                                        .data("{\"error\":\"" + escapeJson(safeAiErrorMessage(error)) + "\"}"));
                                 emitter.completeWithError(error);
                             } catch (IOException e) {
                                 emitter.completeWithError(e);
@@ -291,16 +370,16 @@ public class AiService {
                 );
 
             } catch (Exception e) {
-                log.error("流式生成失败", e);
+                log.error("流式生成失败: {}", e.getClass().getSimpleName());
                 try {
                     emitter.send(SseEmitter.event()
                             .name("error")
-                            .data("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}"));
+                            .data("{\"error\":\"" + escapeJson(safeAiErrorMessage(e)) + "\"}"));
                     emitter.complete();
                 } catch (IOException ex) {
                     emitter.complete();
                 }
-                saveGenerationLog(dto, "", "", e.getMessage(), 0);
+                saveGenerationLog(dto, "", "", safeAiErrorMessage(e), 0);
             }
         });
 
@@ -315,18 +394,27 @@ public class AiService {
 
         CompletableFuture.runAsync(() -> {
             try {
+                final String prompt = buildPrompt(dto);
+                sink.tryEmitNext("{\"type\":\"start\"}");
+
+                if (aiGovernanceService.isEnabled()) {
+                    AiGovernanceService.InvokeResult result = aiGovernanceService.invoke(
+                            resolveScene(dto), prompt, privateContext(dto));
+                    sink.tryEmitNext("{\"type\":\"data\",\"content\":\"" + escapeJson(result.text()) + "\"}");
+                    sink.tryEmitNext("{\"type\":\"complete\"}");
+                    sink.tryEmitComplete();
+                    saveGenerationLog(dto, prompt, result.text(), null, 1);
+                    return;
+                }
+
                 AiConfig config = dto.getConfigId() != null
                         ? getConfigById(dto.getConfigId())
                         : getDefaultConfig();
-
-                String prompt = buildPrompt(dto);
                 StringBuilder fullResponse = new StringBuilder();
-
-                sink.tryEmitNext("{\"type\":\"start\"}");
 
                 OkHttpUtil.streamAiApi(
                         config.getApiUrl(),
-                        config.getApiKey(),
+                        resolveApiKey(config),
                         config.getModelName(),
                         config.getTemperature().doubleValue(),
                         config.getMaxTokens(),
@@ -337,7 +425,7 @@ public class AiService {
                             sink.tryEmitNext("{\"type\":\"data\",\"content\":\"" + escapeJson(content) + "\"}");
                         },
                         error -> {
-                            sink.tryEmitNext("{\"type\":\"error\",\"message\":\"" + escapeJson(error.getMessage()) + "\"}");
+                            sink.tryEmitNext("{\"type\":\"error\",\"message\":\"" + escapeJson(safeAiErrorMessage(error)) + "\"}");
                             sink.tryEmitComplete();
                         },
                         () -> {
@@ -348,9 +436,9 @@ public class AiService {
                 );
 
             } catch (Exception e) {
-                sink.tryEmitNext("{\"type\":\"error\",\"message\":\"" + escapeJson(e.getMessage()) + "\"}");
+                sink.tryEmitNext("{\"type\":\"error\",\"message\":\"" + escapeJson(safeAiErrorMessage(e)) + "\"}");
                 sink.tryEmitComplete();
-                saveGenerationLog(dto, "", "", e.getMessage(), 0);
+                saveGenerationLog(dto, "", "", safeAiErrorMessage(e), 0);
             }
         });
 
@@ -363,9 +451,9 @@ public class AiService {
      * 查询生成历史
      */
     public List<AiGenerationLog> listHistory(Long datasetId, String contextType, Integer limit) {
-        if (limit == null) limit = 20;
+        int safeLimit = SqlGuard.clampLimit(limit, 20, 100);
         if (datasetId != null) {
-            return aiGenerationLogMapper.selectByDatasetId(datasetId, limit);
+            return aiGenerationLogMapper.selectByDatasetId(datasetId, safeLimit);
         }
         return aiGenerationLogMapper.selectList(null);
     }
@@ -378,6 +466,26 @@ public class AiService {
     }
 
     // ========== 内部方法 ==========
+
+    /** 场景解析：显式 scene > templateKey 映射 > 默认 DATASET_SUMMARY。 */
+    private AiScene resolveScene(AiGenerateDTO dto) {
+        AiScene scene = AiScene.fromCode(dto.getScene());
+        if (scene == null) {
+            scene = AiScene.fromTemplateKey(dto.getTemplateKey());
+        }
+        return scene == null ? AiScene.DATASET_SUMMARY : scene;
+    }
+
+    /** 私有模式调用上下文；主体只用于审计摘要。 */
+    private AiGovernanceService.InvokeContext privateContext(AiGenerateDTO dto) {
+        return new AiGovernanceService.InvokeContext(dto.getDatasetId(), null, null, currentSubject(), false);
+    }
+
+    private String currentSubject() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        Object principal = authentication == null ? null : authentication.getPrincipal();
+        return principal == null ? "user:anonymous" : "user:" + principal;
+    }
 
     /**
      * 构建Prompt
@@ -422,7 +530,7 @@ public class AiService {
                     prompt = prompt.replace("{{columnStats}}", columnStats);
                 }
             } catch (Exception e) {
-                log.warn("填充数据集变量失败: {}", e.getMessage());
+                log.warn("填充数据集变量失败: {}", e.getClass().getSimpleName());
             }
         }
 
@@ -432,12 +540,31 @@ public class AiService {
             for (Map.Entry<String, Object> entry : extra.entrySet()) {
                 String value = entry.getValue() instanceof String
                         ? (String) entry.getValue()
-                        : entry.getValue().toString();
+                        : String.valueOf(entry.getValue());
                 prompt = prompt.replace("{{" + entry.getKey() + "}}", value);
             }
         }
 
-        return prompt;
+        // 统一出口：先脱敏，再限制长度，保证任何路径都不会把敏感原文送入模型
+        String masked = aiPiiMasker.maskText(prompt);
+        if (masked.length() > maxPromptChars) {
+            masked = masked.substring(0, maxPromptChars);
+        }
+        return masked;
+    }
+
+    /**
+     * 对外/落库的错误信息：只透出可安全展示的业务提示，其余统一为通用文案，
+     * 避免供应商响应、SQL、堆栈等细节泄露。
+     */
+    private String safeAiErrorMessage(Throwable e) {
+        if (e instanceof BusinessException be) {
+            String message = be.getMessage();
+            if (message != null && message.length() <= 200) {
+                return message;
+            }
+        }
+        return "AI 服务调用失败，请检查配置与网络";
     }
 
     /**
@@ -453,19 +580,42 @@ public class AiService {
             // 构建输入摘要(不包含原始数据)
             Map<String, Object> inputSummary = new java.util.LinkedHashMap<>();
             inputSummary.put("templateKey", dto.getTemplateKey());
-            inputSummary.put("variables", dto.getVariables());
-            inputSummary.put("extraContext", dto.getExtraContext());
-            log.setInputSummary(objectMapper.writeValueAsString(inputSummary));
+            inputSummary.put("variables", maskMap(dto.getVariables()));
+            inputSummary.put("extraContext", maskMap(dto.getExtraContext()));
+            log.setInputSummary(truncate(aiPiiMasker.maskText(objectMapper.writeValueAsString(inputSummary))));
 
-            log.setPrompt(prompt);
-            log.setResponse(response);
+            // 调用历史只保存脱敏且截断后的文本，不保存完整敏感数据
+            log.setPrompt(truncate(aiPiiMasker.maskText(prompt)));
+            log.setResponse(truncate(aiPiiMasker.maskText(response)));
             log.setStatus(status);
-            log.setErrorMsg(errorMsg);
+            log.setErrorMsg(truncate(aiPiiMasker.maskText(errorMsg)));
 
             aiGenerationLogMapper.insert(log);
         } catch (Exception e) {
             log.error("保存生成历史失败: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 对 Map 中的字符串值做脱敏，用于调用历史的输入摘要。
+     */
+    private Map<String, Object> maskMap(Map<String, ?> source) {
+        if (source == null) {
+            return null;
+        }
+        Map<String, Object> masked = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, ?> entry : source.entrySet()) {
+            Object value = entry.getValue();
+            masked.put(entry.getKey(), value instanceof String ? aiPiiMasker.maskText((String) value) : value);
+        }
+        return masked;
+    }
+
+    private String truncate(String text) {
+        if (text == null) {
+            return null;
+        }
+        return text.length() > LOG_TEXT_LIMIT ? text.substring(0, LOG_TEXT_LIMIT) + "...(truncated)" : text;
     }
 
     /**

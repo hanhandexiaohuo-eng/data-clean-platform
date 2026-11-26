@@ -1,0 +1,175 @@
+# ============================================================
+# Nginx 同源入口（HTTP 基线，模板）
+# ------------------------------------------------------------
+# 变量替换：仅由 deploy/nginx/docker-entrypoint.d/40-render-nginx-conf.sh
+# 使用 envsubst 白名单替换 ${NGINX_CLIENT_MAX_BODY_SIZE} 等，
+# 避免误替换 $uri/$host/$remote_addr 等 Nginx 内置变量。
+# ============================================================
+
+# 限流区（按来源 IP）
+limit_req_zone $binary_remote_addr zone=api_zone:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=upload_zone:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=ai_zone:10m rate=6r/m;
+limit_conn_zone $binary_remote_addr zone=addr:10m;
+
+# 访问日志脱敏：不记录来源地址明文与查询串（IP 仅以应用侧 HMAC 摘要统计）
+log_format safe_main '[$time_local] "$request_method $uri $server_protocol" '
+                     '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+
+server {
+    listen 80;
+    server_name _;
+
+    server_tokens off;
+    charset utf-8;
+
+    limit_req_status 429;
+    limit_conn_status 429;
+
+    access_log /var/log/nginx/access.log safe_main;
+    error_log  /var/log/nginx/error.log crit;
+
+    # 请求体大小限制（由环境变量注入，需与后端 UPLOAD_MAX_REQUEST_SIZE 协调）
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+    client_body_timeout 30s;
+
+    # 安全响应头
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header X-XSS-Protection "0" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+
+    # 上游 5xx 统一脱敏，不回显 Nginx/上游内部信息
+    proxy_intercept_errors on;
+    proxy_hide_header X-Powered-By;
+    proxy_hide_header Server;
+    error_page 502 504 = @gateway_error;
+    error_page 404 = @not_found;
+
+    # 容器健康检查专用，不暴露细节
+    location = /nginx-health {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    # 后端健康检查不对外公开
+    location = /api/health {
+        return 404;
+    }
+
+    # 运维/管理接口不对外公开
+    location /api/admin/ {
+        return 404;
+    }
+
+    # 运行指标与诊断接口仅在容器内部网络访问，边缘一律 404
+    location /actuator/ {
+        return 404;
+    }
+
+    location /api/ops/ {
+        return 404;
+    }
+
+    # AI 治理/审计接口不对外暴露（公开模式后端亦拒绝）
+    location /api/ai/governance/ {
+        return 404;
+    }
+
+    # 网关自身错误统一返回脱敏 JSON
+    location @gateway_error {
+        internal;
+        default_type application/json;
+        return 502 '{"code":502,"message":"服务暂不可用"}';
+    }
+
+    location @not_found {
+        internal;
+        default_type application/json;
+        return 404 '{"code":404,"message":"资源不存在"}';
+    }
+
+    # AI 接口更严格限流
+    location ~ ^/api/(public/ai/challenge|ai/generate) {
+        limit_req zone=ai_zone burst=3 nodelay;
+        limit_conn addr 4;
+        proxy_pass http://backend:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
+    }
+
+    # 上传接口单独限流
+    location = /api/dataset/upload {
+        limit_req zone=upload_zone burst=3 nodelay;
+        proxy_pass http://backend:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
+    # API 统一反向代理到内部后端（不暴露 backend 端口）
+    location /api/ {
+        limit_req zone=api_zone burst=60 nodelay;
+        proxy_pass http://backend:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        # 错误响应不泄露上游细节
+        proxy_intercept_errors off;
+    }
+
+    # 静态资源长缓存（带内容哈希的文件）
+    location /assets/ {
+        # 必须显式声明 root：server 级未设置 root，仅 location / 内设置了
+        root /usr/share/nginx/html;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800, immutable";
+        # 子 location 的 add_header 会覆盖 server 级配置，需重复安全头
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+        add_header X-XSS-Protection "0" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+        try_files $uri =404;
+    }
+
+    # 首页与 SPA 路由
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+        add_header X-XSS-Protection "0" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+    }
+
+    # 隐藏文件拒绝
+    location ~ /\. {
+        deny all;
+    }
+}

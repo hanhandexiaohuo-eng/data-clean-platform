@@ -19,6 +19,7 @@ application-*.properties
 .env
 .env.*
 !.env.example
+!.env.*.example
 
 # 密钥 / 证书
 *.key
@@ -84,13 +85,17 @@ pnpm-lock.yaml
 .settings/
 
 # ------------------------------------------------------------
-# 运行时数据 / 上传文件 / 日志
+# 运行时数据 / 上传文件 / 日志 / 备份
 # ------------------------------------------------------------
 uploads/
 logs/
 log/
+backups/
+data/
+certs/
 *.log
 *.log.*
+*.dump
 tmp/
 temp/
 
@@ -104,10 +109,14 @@ temp/
 *.csv
 *.xlsx
 *.xls
+# 例外：演示数据为人工构造的合成样例，需要随代码发布
+!backend/src/main/resources/demo/*.csv
 # SQL 备份文件可能含 ai_config 表的真实 API Key 与业务数据，禁止提交
 # 例外：sql/ 目录下的建表脚本需要提交
 *.sql
 !sql/*.sql
+!db/migration/*.sql
+!db/rollback/*.sql
 
 # ------------------------------------------------------------
 # 操作系统

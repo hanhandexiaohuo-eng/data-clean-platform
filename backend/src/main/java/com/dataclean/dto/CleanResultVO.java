@@ -45,4 +45,19 @@ public class CleanResultVO {
      * 执行耗时(毫秒)
      */
     private Integer executeTimeMs;
+
+    /**
+     * 异步任务ID（正式执行时返回，前端据此轮询进度）
+     */
+    private Long jobId;
+
+    /**
+     * 新产生的数据版本ID（任务成功后可通过任务详情查询）
+     */
+    private Long versionId;
+
+    /**
+     * 当前可用版本ID
+     */
+    private Long currentVersionId;
 }

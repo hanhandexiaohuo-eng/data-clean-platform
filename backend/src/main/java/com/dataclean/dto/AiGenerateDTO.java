@@ -21,6 +21,12 @@ public class AiGenerateDTO {
     private String templateKey;
 
     /**
+     * 场景标识（DATASET_SUMMARY/FIELD_RELATION/OUTLIER_ANALYSIS/CHART_INSIGHT/CLEAN_SUGGESTION）。
+     * 为空时按 templateKey 映射，映射不到则使用 DATASET_SUMMARY。
+     */
+    private String scene;
+
+    /**
      * 上下文类型
      */
     private String contextType;
@@ -49,4 +55,9 @@ public class AiGenerateDTO {
      * 额外上下文数据(图表类型、坐标轴等)
      */
     private Map<String, Object> extraContext;
+
+    /**
+     * 公开模式人机挑战令牌（X-AI-Challenge，仅公开模式使用）
+     */
+    private String challengeToken;
 }

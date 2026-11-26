@@ -23,6 +23,19 @@ public class OkHttpUtil {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    /** 日志/异常中外部响应的最大保留长度，避免把完整敏感响应写入日志 */
+    private static final int MAX_DETAIL_CHARS = 200;
+
+    private static String brief(String text) {
+        if (text == null) {
+            return "";
+        }
+        String oneLine = text.replaceAll("[\\r\\n]+", " ");
+        return oneLine.length() <= MAX_DETAIL_CHARS
+                ? oneLine
+                : oneLine.substring(0, MAX_DETAIL_CHARS) + "...(truncated)";
+    }
+
     /**
      * 同步调用AI接口
      */
@@ -41,8 +54,10 @@ public class OkHttpUtil {
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "Unknown error";
-                log.error("AI API 调用失败: HTTP {}, 响应: {}", response.code(), errorBody);
-                throw new IOException("AI API 调用失败: " + response.code() + ", " + errorBody);
+                // 仅记录状态码与响应长度，避免把供应商错误信息（可能回显密钥）写入日志
+                log.error("AI API 调用失败: HTTP {}, 响应长度={}", response.code(),
+                        errorBody != null ? errorBody.length() : 0);
+                throw new IOException("AI API 调用失败: HTTP " + response.code());
             }
 
             String responseBody = response.body().string();
@@ -101,7 +116,10 @@ public class OkHttpUtil {
                                     onData.accept(content);
                                 }
                             } catch (Exception e) {
-                                log.error("解析SSE数据失败: {}", data, e);
+                                // 不打印模型响应原文，避免日志留存敏感内容
+                                log.error("解析SSE数据失败: length={}, error={}",
+                                        data != null ? data.length() : 0,
+                                        e.getClass().getSimpleName());
                             }
                         }
                     }

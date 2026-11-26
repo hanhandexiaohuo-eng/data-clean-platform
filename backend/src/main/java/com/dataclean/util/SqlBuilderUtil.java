@@ -17,12 +17,14 @@ public class SqlBuilderUtil {
      */
     public static String buildCreateTableSql(String tableName, List<DatasetColumn> columns) {
         StringBuilder sql = new StringBuilder("CREATE TABLE IF NOT EXISTS `");
-        sql.append(tableName).append("` (\n");
+        sql.append(SqlGuard.requireTableName(tableName)).append("` (\n");
         sql.append("  `_id` BIGINT NOT NULL AUTO_INCREMENT,\n");
 
         for (DatasetColumn col : columns) {
-            sql.append("  `").append(col.getColumnAlias()).append("` ");
-            sql.append(col.getDataType());
+            String column = SqlGuard.requireIdentifier(col.getColumnAlias(), "列名");
+            String dataType = SqlGuard.requireColumnType(col.getDataType());
+            sql.append("  `").append(column).append("` ");
+            sql.append(dataType);
             if (col.getNullable() != null && col.getNullable() == 0) {
                 sql.append(" NOT NULL");
             } else {
@@ -41,49 +43,55 @@ public class SqlBuilderUtil {
      * 构建插入SQL
      */
     public static String buildInsertSql(String tableName, List<String> columns) {
+        String safeTable = SqlGuard.requireTableName(tableName);
         String colStr = columns.stream()
-                .map(c -> "`" + c + "`")
+                .map(c -> "`" + SqlGuard.requireIdentifier(c, "列名") + "`")
                 .collect(Collectors.joining(", "));
         String valPlaceholder = columns.stream()
                 .map(c -> "?")
                 .collect(Collectors.joining(", "));
 
-        return "INSERT INTO `" + tableName + "` (" + colStr + ") VALUES (" + valPlaceholder + ")";
+        return "INSERT INTO `" + safeTable + "` (" + colStr + ") VALUES (" + valPlaceholder + ")";
     }
 
     /**
      * 构建重命名表SQL
      */
     public static String buildRenameTableSql(String oldName, String newName) {
-        return "RENAME TABLE `" + oldName + "` TO `" + newName + "`";
+        return "RENAME TABLE `" + SqlGuard.requireTableName(oldName) + "` TO `"
+                + SqlGuard.requireTableName(newName) + "`";
     }
 
     /**
      * 构建删除表SQL
      */
     public static String buildDropTableSql(String tableName) {
-        return "DROP TABLE IF EXISTS `" + tableName + "`";
+        return "DROP TABLE IF EXISTS `" + SqlGuard.requireTableName(tableName) + "`";
     }
 
     /**
      * 构建复制表SQL
      */
     public static String buildCopyTableSql(String sourceTable, String targetTable) {
-        return "CREATE TABLE `" + targetTable + "` LIKE `" + sourceTable + "`";
+        return "CREATE TABLE `" + SqlGuard.requireTableName(targetTable) + "` LIKE `"
+                + SqlGuard.requireTableName(sourceTable) + "`";
     }
 
     /**
      * 构建插入复制数据SQL
      */
     public static String buildCopyDataSql(String sourceTable, String targetTable) {
-        return "INSERT INTO `" + targetTable + "` SELECT * FROM `" + sourceTable + "`";
+        return "INSERT INTO `" + SqlGuard.requireTableName(targetTable) + "` SELECT * FROM `"
+                + SqlGuard.requireTableName(sourceTable) + "`";
     }
 
     /**
      * 构建添加列SQL
      */
     public static String buildAddColumnSql(String tableName, String columnName, String dataType) {
-        return "ALTER TABLE `" + tableName + "` ADD COLUMN `" + columnName + "` " + dataType;
+        return "ALTER TABLE `" + SqlGuard.requireTableName(tableName) + "` ADD COLUMN `"
+                + SqlGuard.requireIdentifier(columnName, "列名") + "` "
+                + SqlGuard.requireColumnType(dataType);
     }
 
     /**
@@ -97,6 +105,10 @@ public class SqlBuilderUtil {
      * 生成备份表名
      */
     public static String generateBackupTableName(String originalTableName) {
-        return originalTableName + "_backup_" + System.currentTimeMillis();
+        String base = SqlGuard.requireTableName(originalTableName);
+        if (base.length() > 40) {
+            base = base.substring(0, 40);
+        }
+        return SqlGuard.requireTableName(base + "_backup_" + System.currentTimeMillis());
     }
 }

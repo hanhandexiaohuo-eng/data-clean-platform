@@ -2,6 +2,7 @@ package com.dataclean.util;
 
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +18,10 @@ import java.util.Map;
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret:CHANGE_ME_JWT_SECRET}")
+    /**
+     * 必须由环境变量 JWT_SECRET 提供，不再提供内置默认值。
+     */
+    @Value("${jwt.secret}")
     private String secret;
 
     @Value("${jwt.expiration:604800000}")
@@ -29,15 +33,18 @@ public class JwtUtil {
     @Value("${jwt.prefix:Bearer }")
     private String prefix;
 
-    private SecretKey getKey() {
-        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
-        // 确保 key 至少 256 bits
-        if (keyBytes.length < 32) {
-            byte[] padded = new byte[32];
-            System.arraycopy(keyBytes, 0, padded, 0, keyBytes.length);
-            keyBytes = padded;
+    /**
+     * 启动时校验密钥强度，但绝不输出密钥内容。
+     */
+    @PostConstruct
+    void validateSecret() {
+        if (secret == null || secret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException("JWT_SECRET 未配置或长度不足 32 字节，启动中止");
         }
-        return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    private SecretKey getKey() {
+        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

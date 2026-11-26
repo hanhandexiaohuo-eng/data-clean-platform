@@ -1,0 +1,32 @@
+# ============================================================
+# HTTPS 覆盖（可选，证书就绪后启用）
+# ------------------------------------------------------------
+# 用法：
+#   1. 将证书放入 deploy/certs/fullchain.pem 与 privkey.pem（勿提交仓库）；
+#   2. 在 .env 设置 PUBLIC_SERVER_NAME=your.domain（仅域名，不含 https://）；
+#   3. docker compose -f docker-compose.yml -f deploy/docker-compose.https.yml up -d --build
+#
+# 注意：模板挂载路径必须包含 "https"，渲染脚本据此启用
+# 「真实域名 + 证书可读」强校验，避免绕过校验后带 _ 或错误域名上线。
+# ============================================================
+services:
+  nginx:
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+    # 容器内专用健康端口，不映射宿主机
+    expose:
+      - "8080"
+    volumes:
+      - ./deploy/certs:/etc/nginx/certs:ro
+      - ./deploy/nginx/default.https.conf.template:/etc/nginx/https.conf.template:ro
+    environment:
+      NGINX_TEMPLATE: /etc/nginx/https.conf.template
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-25m}
+      NGINX_SERVER_NAME: ${PUBLIC_SERVER_NAME:-_}
+      NGINX_HTTPS_CERT: /etc/nginx/certs/fullchain.pem
+      NGINX_HTTPS_KEY: /etc/nginx/certs/privkey.pem
+    healthcheck:
+      # 80 端口仅做 301 跳转，健康检查走容器内专用 8080
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/nginx-health

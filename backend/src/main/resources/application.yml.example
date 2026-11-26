@@ -3,28 +3,35 @@
 # ------------------------------------------------------------
 # 用法：
 #   1. 复制本文件为同目录下的 application.yml
-#   2. 把 ${XXX} 占位符替换为你自己的值，可用两种方式：
-#        a) 直接在 application.yml 中填明文（本地开发，且已确认该文件被 .gitignore 忽略）
-#        b) 通过环境变量注入（推荐，配置文件中不出现任何明文）
-#   3. 切勿把填好真实值的 application.yml 提交到仓库
+#   2. 真实值通过环境变量注入（推荐），或复制项目根目录 .env.example 为 .env
+#   3. 切勿把填好真实值的 application.yml / .env 提交到仓库
 # ============================================================
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
   servlet:
     encoding:
       charset: UTF-8
       enabled: true
       force: true
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+    include-exception: false
 
 spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  config:
+    import: optional:file:./.env[.properties]
   datasource:
     type: com.alibaba.druid.pool.DruidDataSource
     driver-class-name: com.mysql.cj.jdbc.Driver
-    # 数据库连接地址：改为你自己的 host / port / 库名
-    url: ${DB_URL:jdbc:mysql://localhost:3306/dataclean?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowMultiQueries=true}
-    username: ${DB_USERNAME:your_db_username}
-    password: ${DB_PASSWORD:your_db_password}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/dataclean?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     druid:
       initial-size: 5
       min-idle: 5
@@ -36,8 +43,10 @@ spring:
   servlet:
     multipart:
       enabled: true
-      max-file-size: 100MB
-      max-request-size: 200MB
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:100MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:200MB}
+      # 临时文件固定放在上传根目录下的 tmp/，不落原始文件名
+      location: ${UPLOAD_PATH:./uploads}/tmp
 
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
@@ -56,22 +65,153 @@ mybatis-plus:
       table-prefix: ""
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
 
 logging:
   level:
-    com.dataclean: debug
-    com.baomidou.mybatisplus: info
+    com.dataclean: ${LOG_LEVEL:info}
+    com.baomidou.mybatisplus: warn
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{50} - %msg%n"
 
-# JWT 配置
-# secret 必须替换为随机长字符串（建议 >= 32 位），生成方式见 README
+# JWT 配置：secret 必须由环境变量提供（>= 32 字符随机串），缺失时启动失败
 jwt:
-  secret: ${JWT_SECRET:CHANGE_ME_TO_A_RANDOM_32_CHAR_MIN_SECRET}
-  expiration: 604800000
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:604800000}
   header: Authorization
   prefix: "Bearer "
 
 upload:
-  path: ./uploads
+  path: ${UPLOAD_PATH:./uploads}
+  # 上传临时文件存活时间（分钟）与清理间隔；上传目录不可静态访问
+  temp-ttl-minutes: ${UPLOAD_TEMP_TTL_MINUTES:120}
+  temp-clean-interval-minutes: ${UPLOAD_TEMP_CLEAN_INTERVAL_MINUTES:60}
+  # 恶意文件扫描实现：http=受控扫描 API（公开模式强制要求）；none=仅本地调试
+  scan-provider: ${UPLOAD_SCAN_PROVIDER:none}
+  scan:
+    # 公开模式强制要求扫描；缺失实现或地址时拒绝启动
+    required: ${UPLOAD_SCAN_REQUIRED:true}
+    url: ${UPLOAD_SCAN_URL:}
+    timeout-ms: ${UPLOAD_SCAN_TIMEOUT_MS:5000}
+    max-response-bytes: ${UPLOAD_SCAN_MAX_RESPONSE_BYTES:65536}
+    token: ${UPLOAD_SCAN_TOKEN:}
+
+app:
+  # 运行模式：private（默认）/ public（免登录公开演示）
+  mode: ${APP_MODE:private}
+  network:
+    # 仅这些 CIDR 的直连请求才采信 X-Real-IP/X-Forwarded-For；禁止 0.0.0.0/0
+    trusted-proxies: ${TRUSTED_PROXY_CIDRS:127.0.0.1/32,::1/128}
+  monitoring:
+    interval-seconds: ${MONITORING_INTERVAL_SECONDS:60}
+    upload-volume-capacity-mb: ${UPLOAD_VOLUME_CAPACITY_MB:1024}
+    alert:
+      session-capacity-ratio: ${ALERT_SESSION_CAPACITY_RATIO:0.8}
+      upload-volume-ratio: ${ALERT_UPLOAD_VOLUME_RATIO:0.85}
+      db-pool-ratio: ${ALERT_DB_POOL_RATIO:0.9}
+      ai-budget-ratio: ${ALERT_AI_BUDGET_RATIO:0.9}
+      cleanup-failures: ${ALERT_CLEANUP_FAILURES:3}
+      orphan-tables: ${ALERT_ORPHAN_TABLES:10}
+      scan-failures-per-interval: ${ALERT_SCAN_FAILURES_PER_INTERVAL:3}
+  public:
+    # public 模式必填；固定源站白名单（逗号分隔，禁止 *），非 local 必须 https
+    allowed-origins: ${PUBLIC_ALLOWED_ORIGIN:}
+    # 独立 HMAC pepper（>=32 字符），仅用于来源 IP 摘要
+    ip-hash-pepper: ${PUBLIC_IP_HASH_PEPPER:}
+    session-ttl-hours: ${PUBLIC_SESSION_TTL_HOURS:24}
+    # 生产公开模式固定为 __Host- 前缀 + Secure + HttpOnly + SameSite=Strict + Path=/ + 无 Domain；
+    # 启动校验不通过将拒绝启动。本地 HTTP 调试只能通过独立 local Profile 覆盖。
+    cookie-name: ${PUBLIC_COOKIE_NAME:__Host-dc_anon}
+    cookie-secure: true
+    local-insecure-cookie: false
+    cookie-http-only: true
+    cookie-same-site: Strict
+    cookie-path: /
+    cookie-domain: ""
+    max-active-sessions: ${PUBLIC_MAX_ACTIVE_SESSIONS:5000}
+    max-active-sessions-per-ip: ${PUBLIC_MAX_ACTIVE_SESSIONS_PER_IP:10}
+    # 单 IP 每自然日新增会话上限（名称与统计口径一致）
+    session-create-per-ip-per-day: ${PUBLIC_SESSION_CREATE_PER_IP_PER_DAY:20}
+    # 当日创建次数达到阈值后，必须携带一次性会话挑战令牌
+    session-challenge-enabled: ${PUBLIC_SESSION_CHALLENGE_ENABLED:true}
+    session-challenge-threshold: ${PUBLIC_SESSION_CHALLENGE_THRESHOLD:3}
+    max-datasets: ${PUBLIC_MAX_DATASETS:5}
+    max-file-size-mb: ${PUBLIC_MAX_FILE_SIZE_MB:20}
+    max-total-storage-mb: ${PUBLIC_MAX_TOTAL_STORAGE_MB:100}
+    max-rows: ${PUBLIC_MAX_ROWS:100000}
+    max-columns: ${PUBLIC_MAX_COLUMNS:200}
+    max-clean-tasks: ${PUBLIC_MAX_CLEAN_TASKS:50}
+    max-charts: ${PUBLIC_MAX_CHARTS:100}
+    max-exports: ${PUBLIC_MAX_EXPORTS:20}
+    export-max-rows: ${PUBLIC_EXPORT_MAX_ROWS:10000}
+    ai-enabled: ${PUBLIC_AI_ENABLED:false}
+    ai-max-calls-per-day: ${PUBLIC_AI_MAX_CALLS_PER_DAY:20}
+    ai-max-calls-per-ip-per-day: ${PUBLIC_AI_MAX_CALLS_PER_IP_PER_DAY:60}
+    ai-global-daily-calls: ${PUBLIC_AI_GLOBAL_DAILY_CALLS:500}
+    ai-global-daily-token-budget: ${PUBLIC_AI_GLOBAL_DAILY_TOKEN_BUDGET:200000}
+    ai-max-input-chars: ${PUBLIC_AI_MAX_INPUT_CHARS:4000}
+    ai-max-output-tokens: ${PUBLIC_AI_MAX_OUTPUT_TOKENS:1024}
+    ai-max-concurrency: ${PUBLIC_AI_MAX_CONCURRENCY:1}
+    ai-timeout-ms: ${PUBLIC_AI_TIMEOUT_MS:30000}
+    ai-breaker-enabled: ${PUBLIC_AI_BREAKER_ENABLED:true}
+    ai-challenge-enabled: ${PUBLIC_AI_CHALLENGE_ENABLED:true}
+    ai-challenge-difficulty: ${PUBLIC_AI_CHALLENGE_DIFFICULTY:18}
+    ai-challenge-ttl-seconds: ${PUBLIC_AI_CHALLENGE_TTL_SECONDS:120}
+    demo-data-enabled: ${PUBLIC_DEMO_DATA_ENABLED:true}
+    cleanup-enabled: ${PUBLIC_CLEANUP_ENABLED:true}
+    cleanup-interval-minutes: ${PUBLIC_CLEANUP_INTERVAL_MINUTES:60}
+    cleanup-grace-minutes: ${PUBLIC_CLEANUP_GRACE_MINUTES:60}
+  cors:
+    # 生产由 Nginx 同源反代，默认不放行任何跨域来源；仅按需填写完整 Origin（逗号分隔）
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+  admin:
+    # 初始管理员：两个变量都配置时才创建；不配置则跳过初始化
+    username: ${ADMIN_USERNAME:}
+    password: ${ADMIN_PASSWORD:}
+  ai:
+    # AES-256-GCM 主密钥：Base64 编码的 32 字节随机值，仅通过环境变量提供
+    secret-key: ${AI_SECRET_KEY:}
+    max-prompt-chars: ${AI_MAX_PROMPT_CHARS:20000}
+  clean:
+    custom-filter-enabled: ${CLEAN_CUSTOM_FILTER_ENABLED:false}
+  upload:
+    max-rows: ${UPLOAD_MAX_ROWS:500000}
+    max-columns: ${UPLOAD_MAX_COLUMNS:1000}
+    max-excel-sheets: ${UPLOAD_MAX_EXCEL_SHEETS:20}
+  # 持久化异步任务（导入/清洗/恢复）：状态全部落库，重启后可恢复或重试
+  jobs:
+    enabled: ${JOBS_ENABLED:true}
+    worker-threads: ${JOBS_WORKER_THREADS:2}
+    poll-interval-ms: ${JOBS_POLL_INTERVAL_MS:2000}
+    max-runtime-seconds: ${JOBS_MAX_RUNTIME_SECONDS:1800}
+    async-import-rows: ${JOBS_ASYNC_IMPORT_ROWS:20000}
+    async-import-bytes: ${JOBS_ASYNC_IMPORT_BYTES:5242880}
+    chunk-size: ${JOBS_CHUNK_SIZE:1000}
+    public-max-active-per-session: ${JOBS_PUBLIC_MAX_ACTIVE:1}
+    public-max-per-day: ${JOBS_PUBLIC_MAX_PER_DAY:20}
+    public-max-retries: ${JOBS_PUBLIC_MAX_RETRIES:2}
+    private-max-active: ${JOBS_PRIVATE_MAX_ACTIVE:4}
+    private-max-per-day: ${JOBS_PRIVATE_MAX_PER_DAY:500}
+    private-max-retries: ${JOBS_PRIVATE_MAX_RETRIES:3}
+    version-keep: ${JOBS_VERSION_KEEP:5}
+    version-max-age-days: ${JOBS_VERSION_MAX_AGE_DAYS:30}
+
+# 运行指标与内网诊断：独立管理端口，不发布宿主机端口，Nginx 边缘返回 404
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8081}
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: dataclean
+    enable:
+      http:
+        server:
+          requests: true

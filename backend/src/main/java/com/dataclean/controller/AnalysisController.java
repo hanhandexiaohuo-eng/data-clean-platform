@@ -1,9 +1,11 @@
 package com.dataclean.controller;
 
 import com.dataclean.dto.ChartDataVO;
+import com.dataclean.dto.ChartRecommendationVO;
 import com.dataclean.dto.ChartRequestDTO;
 import com.dataclean.dto.Result;
 import com.dataclean.service.AnalysisService;
+import com.dataclean.service.ChartRecommendService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +22,15 @@ import java.util.Map;
 public class AnalysisController {
 
     private final AnalysisService analysisService;
+    private final ChartRecommendService chartRecommendService;
+
+    /**
+     * 根据字段类型、唯一值数量与数据量推荐图表。
+     */
+    @GetMapping("/recommend")
+    public Result<ChartRecommendationVO> recommend(@RequestParam Long datasetId) {
+        return Result.success(chartRecommendService.recommend(datasetId));
+    }
 
     /**
      * 生成图表数据

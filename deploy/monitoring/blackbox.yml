@@ -1,0 +1,15 @@
+# ============================================================
+# blackbox-exporter 探测模块（仅内网）
+# ------------------------------------------------------------
+# 由 Prometheus 的 dataclean-blackbox 作业调用，探测目标从容器网络内部发起，
+# 不经过公网 Nginx，也不会对公网暴露任何内部地址。
+# ============================================================
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      preferred_ip_protocol: ipv4
+      follow_redirects: false
+      valid_status_codes: [200]
